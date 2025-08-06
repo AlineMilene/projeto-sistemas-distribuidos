@@ -2,6 +2,7 @@ import org.apache.zookeeper.*;
 import org.apache.zookeeper.data.Stat;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Scanner;
 import java.util.UUID;
@@ -9,14 +10,22 @@ import java.util.UUID;
 public class JokenpoGame implements Watcher {
     private static final String ZK_ADDRESS = "localhost:2181";
     private static final int SESSION_TIMEOUT = 3000;
+
     private static final String ROOT_PATH = "/jokenpo";
-    private static final String PLAYERS_PATH = ROOT_PATH + "/players";
+    private static final String QUEUE_PATH = ROOT_PATH + "/queue";
+    private static final String LOCKS_PATH = ROOT_PATH + "/locks";
     private static final String MOVES_PATH = ROOT_PATH + "/moves";
+    private static final String BARRIER_PATH = ROOT_PATH + "/barrier";
+    private static final String ELECTION_PATH = ROOT_PATH + "/election";
+
     private static final int NUM_ROUNDS = 3;
 
     private ZooKeeper zk;
     private String playerId;
-    private boolean isLeader;
+    private boolean isLeader = false;
+
+    private int leaderScore = 0;
+    private int secondPlayerScore = 0;
 
     public static void main(String[] args) throws Exception {
         new JokenpoGame().start();
@@ -30,16 +39,17 @@ public class JokenpoGame implements Watcher {
         registerPlayer();
 
         if (isLeader) {
-            System.out.println("Você é o líder (juiz). Aguardando o segundo jogador...");
+            System.out.println("Você entrou no jogo. Você é o líder.");
             waitForSecondPlayer();
             createMovesNode();
-            System.out.println("Segundo jogador detectado. Iniciando o jogo...");
             playGameAsLeader();
         } else {
-            System.out.println("Você é o segundo jogador. Aguarde o início da partida...");
+            System.out.println("Você entrou no jogo. Você é o desafiante.");
             waitForMovesNode();
             playGameAsSecondPlayer();
         }
+
+        printFinalResult();
 
         zk.close();
     }
@@ -49,43 +59,70 @@ public class JokenpoGame implements Watcher {
     }
 
     private void ensureRootPaths() throws KeeperException, InterruptedException {
-        createZNodeIfNotExists(ROOT_PATH, new byte[0]);
-        createZNodeIfNotExists(PLAYERS_PATH, new byte[0]);
+        createZNodeIfNotExists(ROOT_PATH);
+        createZNodeIfNotExists(QUEUE_PATH);
+        createZNodeIfNotExists(LOCKS_PATH);
+        createZNodeIfNotExists(MOVES_PATH);
+        createZNodeIfNotExists(BARRIER_PATH);
+        createZNodeIfNotExists(ELECTION_PATH);
+    }
+
+    private void createZNodeIfNotExists(String path) throws KeeperException, InterruptedException {
+        Stat stat = zk.exists(path, false);
+        if (stat == null) {
+            zk.create(path, new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+        }
     }
 
     private void registerPlayer() throws KeeperException, InterruptedException {
-        List<String> players = zk.getChildren(PLAYERS_PATH, false);
+        String path = zk.create(QUEUE_PATH + "/player-", playerId.getBytes(),
+                ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+        waitForTurn(path);
+    }
 
-        if (players.isEmpty()) {
-            isLeader = true;
+    private void waitForTurn(String path) throws KeeperException, InterruptedException {
+        while (true) {
+            List<String> children = zk.getChildren(QUEUE_PATH, false);
+            Collections.sort(children);
+            String first = children.get(0);
+            String myNode = path.substring(QUEUE_PATH.length() + 1);
+            if (first.equals(myNode)) {
+                isLeader = true;
+                break;
+            } else if (children.size() > 1 && myNode.equals(children.get(1))) {
+                break;
+            } else {
+                System.out.println("Esperando sua vez de jogar...");
+                Thread.sleep(1000);
+            }
         }
-
-        String path = PLAYERS_PATH + "/player-";
-        zk.create(path, playerId.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
     }
 
     private void waitForSecondPlayer() throws KeeperException, InterruptedException {
-        while (zk.getChildren(PLAYERS_PATH, false).size() < 2) {
+        while (true) {
+            List<String> children = zk.getChildren(QUEUE_PATH, false);
+            if (children.size() >= 2) {
+                break;
+            }
             Thread.sleep(1000);
         }
     }
 
     private void createMovesNode() throws KeeperException, InterruptedException {
-        createZNodeIfNotExists(MOVES_PATH, new byte[0]);
+        for (int i = 1; i <= NUM_ROUNDS; i++) {
+            createZNodeIfNotExists(MOVES_PATH + "/round" + i + "-leader");
+            createZNodeIfNotExists(MOVES_PATH + "/round" + i + "-second");
+        }
     }
 
     private void waitForMovesNode() throws KeeperException, InterruptedException {
-        Stat stat;
-        do {
-            stat = zk.exists(MOVES_PATH, false);
+        while (zk.exists(MOVES_PATH + "/round1-leader", false) == null) {
             Thread.sleep(1000);
-        } while (stat == null);
+        }
     }
 
     private void playGameAsLeader() throws KeeperException, InterruptedException {
         Scanner scanner = new Scanner(System.in);
-        int leaderScore = 0;
-        int secondPlayerScore = 0;
 
         for (int round = 1; round <= NUM_ROUNDS; round++) {
             System.out.println("\nRodada " + round + ":");
@@ -93,58 +130,79 @@ public class JokenpoGame implements Watcher {
             System.out.print("Digite sua jogada (pedra, papel ou tesoura): ");
             String leaderMove = scanner.nextLine();
             String movePathLeader = MOVES_PATH + "/round" + round + "-leader";
-            zk.create(movePathLeader, leaderMove.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+            zk.setData(movePathLeader, leaderMove.getBytes(), -1);
 
-            System.out.println("Aguardando jogada do segundo jogador...");
+            System.out.println("Esperando jogada do desafiante...");
             String movePathSecond = MOVES_PATH + "/round" + round + "-second";
-            while (zk.exists(movePathSecond, false) == null) {
+            while (zk.getData(movePathSecond, false, null).length == 0) {
                 Thread.sleep(1000);
             }
 
             String secondMove = new String(zk.getData(movePathSecond, false, null));
-            System.out.println("Segundo jogador escolheu: " + secondMove);
-
             int result = compareMoves(leaderMove, secondMove);
-            if (result > 0) {
-                leaderScore++;
-            } else if (result < 0) {
-                secondPlayerScore++;
-            }
-        }
 
-        printResult(leaderScore, secondPlayerScore, true);
+            printRoundResult("Líder", leaderMove, result);
+        }
     }
 
     private void playGameAsSecondPlayer() throws KeeperException, InterruptedException {
         Scanner scanner = new Scanner(System.in);
-        int leaderScore = 0;
-        int secondPlayerScore = 0;
 
         for (int round = 1; round <= NUM_ROUNDS; round++) {
             System.out.println("\nRodada " + round + ":");
 
             String movePathLeader = MOVES_PATH + "/round" + round + "-leader";
-            while (zk.exists(movePathLeader, false) == null) {
+            while (zk.getData(movePathLeader, false, null).length == 0) {
                 Thread.sleep(1000);
             }
 
             System.out.print("Digite sua jogada (pedra, papel ou tesoura): ");
             String secondMove = scanner.nextLine();
             String movePathSecond = MOVES_PATH + "/round" + round + "-second";
-            zk.create(movePathSecond, secondMove.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+            zk.setData(movePathSecond, secondMove.getBytes(), -1);
 
             String leaderMove = new String(zk.getData(movePathLeader, false, null));
-            System.out.println("Líder escolheu: " + leaderMove);
-
             int result = compareMoves(leaderMove, secondMove);
-            if (result > 0) {
+
+            printRoundResult("Desafiante", secondMove, -result); // inverte resultado
+        }
+    }
+
+    private void printRoundResult(String jogador, String jogada, int resultado) {
+        String mensagem = jogador + " jogou: " + jogada + " e ";
+
+        if (resultado > 0) {
+            mensagem += "venceu esta rodada.";
+            if (jogador.equals("Líder"))
                 leaderScore++;
-            } else if (result < 0) {
+            else
                 secondPlayerScore++;
-            }
+        } else if (resultado < 0) {
+            mensagem += "perdeu esta rodada.";
+            if (jogador.equals("Líder"))
+                secondPlayerScore++;
+            else
+                leaderScore++;
+        } else {
+            mensagem += "esta rodada deu empate.";
         }
 
-        printResult(leaderScore, secondPlayerScore, false);
+        System.out.println(mensagem);
+    }
+
+    private void printFinalResult() {
+        System.out.println("\nFim do jogo. Resultado Final:");
+        System.out.println("Placar - Líder: " + leaderScore + " | Desafiante: " + secondPlayerScore);
+
+        if (leaderScore == secondPlayerScore) {
+            System.out.println("Empate!");
+        } else if ((leaderScore > secondPlayerScore && isLeader) || (secondPlayerScore > leaderScore && !isLeader)) {
+            System.out.println("Você venceu!");
+        } else {
+            System.out.println("Você perdeu!");
+        }
+
+        System.out.println("Obrigado por jogar!");
     }
 
     private int compareMoves(String move1, String move2) {
@@ -154,35 +212,12 @@ public class JokenpoGame implements Watcher {
         if (move1.equals(move2))
             return 0;
 
-        switch (move1) {
-            case "pedra":
-                return move2.equals("tesoura") ? 1 : -1;
-            case "papel":
-                return move2.equals("pedra") ? 1 : -1;
-            case "tesoura":
-                return move2.equals("papel") ? 1 : -1;
-            default:
-                return 0;
-        }
-    }
-
-    private void printResult(int leaderScore, int secondPlayerScore, boolean isLeader) {
-        System.out.println("\nResultado Final:");
-        System.out.println("Placar - Juiz: " + leaderScore + " | Segundo Jogador: " + secondPlayerScore);
-        if (leaderScore == secondPlayerScore) {
-            System.out.println("Empate!");
-        } else if ((leaderScore > secondPlayerScore && isLeader) || (secondPlayerScore > leaderScore && !isLeader)) {
-            System.out.println("Você venceu!");
-        } else {
-            System.out.println("Você perdeu!");
-        }
-    }
-
-    private void createZNodeIfNotExists(String path, byte[] data) throws KeeperException, InterruptedException {
-        Stat stat = zk.exists(path, false);
-        if (stat == null) {
-            zk.create(path, data, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-        }
+        return switch (move1) {
+            case "pedra" -> move2.equals("tesoura") ? 1 : -1;
+            case "papel" -> move2.equals("pedra") ? 1 : -1;
+            case "tesoura" -> move2.equals("papel") ? 1 : -1;
+            default -> 0;
+        };
     }
 
     @Override
