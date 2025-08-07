@@ -39,12 +39,12 @@ public class JokenpoGame implements Watcher {
         registerPlayer();
 
         if (isLeader) {
-            System.out.println("Você entrou no jogo. Você é o líder.");
+            System.out.println("Voce entrou no jogo. Voce eh o lider.");
             waitForSecondPlayer();
             createMovesNode();
             playGameAsLeader();
         } else {
-            System.out.println("Você entrou no jogo. Você é o desafiante.");
+            System.out.println("Voce entrou no jogo. Voce eh o desafiante.");
             waitForMovesNode();
             playGameAsSecondPlayer();
         }
@@ -173,13 +173,13 @@ public class JokenpoGame implements Watcher {
 
         if (resultado > 0) {
             mensagem += "venceu esta rodada.";
-            if (jogador.equals("Líder"))
+            if (jogador.equals("Lider"))
                 leaderScore++;
             else
                 secondPlayerScore++;
         } else if (resultado < 0) {
             mensagem += "perdeu esta rodada.";
-            if (jogador.equals("Líder"))
+            if (jogador.equals("Lider"))
                 secondPlayerScore++;
             else
                 leaderScore++;
@@ -192,17 +192,22 @@ public class JokenpoGame implements Watcher {
 
     private void printFinalResult() {
         System.out.println("\nFim do jogo. Resultado Final:");
-        System.out.println("Placar - Líder: " + leaderScore + " | Desafiante: " + secondPlayerScore);
+        System.out.println("Placar - Lider: " + leaderScore + " | Desafiante: " + secondPlayerScore);
 
         if (leaderScore == secondPlayerScore) {
             System.out.println("Empate!");
         } else if ((leaderScore > secondPlayerScore && isLeader) || (secondPlayerScore > leaderScore && !isLeader)) {
-            System.out.println("Você venceu!");
+            System.out.println("Voce venceu!");
         } else {
-            System.out.println("Você perdeu!");
+            System.out.println("Voce perdeu!");
         }
 
         System.out.println("Obrigado por jogar!");
+
+        if(isLeader){
+            new ZkCleaner().clean("/jokenpo");
+            System.out.println("Limpeza concluida.");
+        }
     }
 
     private int compareMoves(String move1, String move2) {
