@@ -8,8 +8,6 @@ set CP=.;%ZOOKEEPER_PATH%\lib\zookeeper-3.9.3.jar;%ZOOKEEPER_PATH%\lib\zookeeper
 
 echo Compilando JokenpoGame.java...
 javac -cp "%CP%" JokenpoGame.java
-echo Compilando ZkCleaner.java...
-javac -cp "%CP%" ZkCleaner.java
 
 if %ERRORLEVEL% NEQ 0 (
     echo Erro na compilacao.
