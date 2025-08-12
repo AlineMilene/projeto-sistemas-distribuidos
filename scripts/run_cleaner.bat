@@ -8,6 +8,7 @@ set CP=.;%ZOOKEEPER_PATH%\lib\zookeeper-3.9.3.jar;%ZOOKEEPER_PATH%\lib\zookeeper
 
 echo Executando limpeza do ZooKeeper no caminho /jokenpo...
 
+javac -cp "%CP%" ZkCleaner.java
 java -cp "%CP%" ZkCleaner
 
 if %ERRORLEVEL% NEQ 0 (
