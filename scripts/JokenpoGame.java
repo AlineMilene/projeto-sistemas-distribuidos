@@ -190,7 +190,7 @@ public class JokenpoGame implements Watcher {
         System.out.println(mensagem);
     }
 
-    private void printFinalResult() {
+    private void printFinalResult() throws IOException, KeeperException, InterruptedException {
         System.out.println("\nFim do jogo. Resultado Final:");
         System.out.println("Placar - Lider: " + leaderScore + " | Desafiante: " + secondPlayerScore);
 
